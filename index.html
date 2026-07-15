@@ -114,6 +114,19 @@
   .reticle-cross::before{ left:50%; top:-6px; bottom:-6px; width:1.5px; transform:translateX(-50%); }
   .reticle-cross::after{ top:50%; left:-6px; right:-6px; height:1.5px; transform:translateY(-50%); }
 
+  /* ==== 画面外から接近する隕石の警告矢印 ==== */
+  .edge-warn{
+    position:absolute; width:0; height:0;
+    border-top:9px solid transparent;
+    border-bottom:9px solid transparent;
+    border-left:15px solid var(--accent-red);
+    filter: drop-shadow(0 0 5px rgba(255,59,48,0.85));
+    pointer-events:none; z-index:8;
+    display:none;
+    animation: warnPulse 0.6s ease-in-out infinite;
+  }
+  @keyframes warnPulse{ 0%,100%{ opacity:0.55; } 50%{ opacity:1; } }
+
   /* ==== 左：仮想スティック ==== */
   #stickZone{
     position:absolute; left:calc(18px + env(safe-area-inset-left)); bottom:calc(18px + env(safe-area-inset-bottom));
@@ -260,13 +273,14 @@ const lerpNum = (a, b, t) => a + (b - a) * t;
 const rand = (a, b) => a + Math.random() * (b - a);
 
 /* ---------- 定数 ---------- */
-const YAW_MAX = deg(60);      // 左右可動範囲（片側60度、合計120度）
-const PITCH_MAX = deg(45);    // 上方向可動範囲
-const TOTAL_TIME = 90;        // 生存目標秒数
-const MAX_LIFE = 100;
-const DAMAGE_PER_HIT = 22;
+const YAW_MAX = deg(60);       // 左右可動範囲（片側60度、合計120度）
+const PITCH_UP_MAX = deg(60);  // 上方向の可動範囲
+const PITCH_DOWN_MAX = deg(30);// 下方向の可動範囲
+const TOTAL_TIME = 90;         // 生存目標秒数
+const MAX_LIFE = 160;
+const DAMAGE_PER_HIT = 20;
 const SPAWN_RADIUS = 52;
-const HIT_TOLERANCE = deg(4.2); // 発射時の命中許容角
+const RETICLE_HIT_RADIUS_PX = 36; // 照準の丸の半径（この中に入ったら命中判定）
 const FIRE_COOLDOWN = 0.34;     // 重厚な単発砲のためのクールダウン
 
 /* ---------- DOM参照 ---------- */
@@ -306,7 +320,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.3;
 canvasWrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -318,8 +332,8 @@ const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerH
 // 砲台の旋回・仰角の回転中心（＝隕石が狙ってくる標的でもある）
 const PIVOT_POS = new THREE.Vector3(0, 1.4, 0);
 // 三人称チェイスカメラのパラメータ：自分（砲台）を後方・上方から見る視点にいたします
-const CHASE_DISTANCE = 7.2;
-const CHASE_HEIGHT = 3.1;
+const CHASE_DISTANCE = 5.2;
+const CHASE_HEIGHT = 2.3;
 const cameraBasePos = new THREE.Vector3();
 const cameraLookTarget = new THREE.Vector3();
 camera.position.set(0, CHASE_HEIGHT + PIVOT_POS.y, CHASE_DISTANCE);
@@ -334,11 +348,11 @@ window.addEventListener('resize', onResize);
 onResize();
 
 /* ---------- 光源（全体を明るく、夕景の暖色を強めにいたします） ---------- */
-scene.add(new THREE.HemisphereLight(0x6f8fc4, 0x2a2018, 1.25));
-const duskLight = new THREE.DirectionalLight(0xffb37a, 0.95);
+scene.add(new THREE.HemisphereLight(0x86a4d6, 0x3a2f22, 1.65));
+const duskLight = new THREE.DirectionalLight(0xffc08a, 1.2);
 duskLight.position.set(-40, 22, -15);
 scene.add(duskLight);
-const fillLight = new THREE.DirectionalLight(0x5d7fb0, 0.4);
+const fillLight = new THREE.DirectionalLight(0x7896c4, 0.6);
 fillLight.position.set(30, 18, 30);
 scene.add(fillLight);
 
@@ -361,8 +375,8 @@ const glowTex = makeGlowTexture();
 function makeGridTexture() {
   const c = document.createElement('canvas'); c.width = 512; c.height = 512;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#1c2029'; ctx.fillRect(0, 0, 512, 512);
-  ctx.strokeStyle = 'rgba(255,176,32,0.26)'; ctx.lineWidth = 2;
+  ctx.fillStyle = '#2c3242'; ctx.fillRect(0, 0, 512, 512);
+  ctx.strokeStyle = 'rgba(255,190,90,0.38)'; ctx.lineWidth = 2;
   for (let i = 0; i <= 512; i += 64) {
     ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 512); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(512, i); ctx.stroke();
@@ -572,19 +586,13 @@ window.addEventListener('pointerup', releaseStickPointer);
 window.addEventListener('pointercancel', releaseStickPointer);
 
 function updateStick(dt) {
-  if (stickPointerId === null) {
-    const k = 1 - Math.exp(-12 * dt);
-    stickRaw.x += (0 - stickRaw.x) * k;
-    stickRaw.y += (0 - stickRaw.y) * k;
-    if (Math.abs(stickRaw.x) < 0.001) stickRaw.x = 0;
-    if (Math.abs(stickRaw.y) < 0.001) stickRaw.y = 0;
-    stickKnob.style.transform = `translate(${stickRaw.x * stickMaxPx}px, ${stickRaw.y * stickMaxPx}px)`;
-  }
+  // 指を離しても中央へ自動復帰しない仕様のため、非ドラッグ時はそのまま保持いたします
   const deadzone = 0.04;
   const sx = Math.abs(stickRaw.x) < deadzone ? 0 : stickRaw.x;
-  const syUp = clamp(-stickRaw.y, 0, 1);
+  const sy = Math.abs(stickRaw.y) < deadzone ? 0 : stickRaw.y;
   turret.yawRaw = sx * YAW_MAX;
-  turret.pitchRaw = (syUp < deadzone ? 0 : syUp) * PITCH_MAX;
+  // スティック上方向(sy<0)で上60度、下方向(sy>0)で下30度まで、非対称にマッピングいたします
+  turret.pitchRaw = sy < 0 ? (-sy) * PITCH_UP_MAX : -(sy * PITCH_DOWN_MAX);
 }
 
 /* =========================================================================
@@ -593,9 +601,11 @@ function updateStick(dt) {
 const turret = { yawRaw: 0, pitchRaw: 0, yawEased: 0, pitchEased: 0, recoil: 0 };
 
 const currentAimDir = new THREE.Vector3(0, 0, -1);
+const _tmpV = new THREE.Vector3();
+const _camFwd = new THREE.Vector3();
 
 function updateTurret(dt) {
-  const rate = (state.phase === 'win') ? 1.4 : 4.4;
+  const rate = (state.phase === 'win') ? 1.0 : 2.3;
   const k = 1 - Math.exp(-rate * dt);
   turret.yawEased += (turret.yawRaw - turret.yawEased) * k;
   turret.pitchEased += (turret.pitchRaw - turret.pitchEased) * k;
@@ -694,7 +704,7 @@ function spawnDirection(yaw, pitch) {
 
 function spawnMeteor(diff) {
   const yaw = rand(-YAW_MAX, YAW_MAX);
-  const pitch = rand(0, PITCH_MAX);
+  const pitch = rand(-PITCH_DOWN_MAX, PITCH_UP_MAX);
   const dir = spawnDirection(yaw, pitch);
   const spawnPos = PIVOT_POS.clone().add(dir.clone().multiplyScalar(SPAWN_RADIUS));
 
@@ -708,7 +718,7 @@ function spawnMeteor(diff) {
     targetPos = PIVOT_POS.clone().add(flyPast).add(lateral);
   }
 
-  const isFiery = isDirect ? Math.random() < 0.7 : Math.random() < 0.25;
+  const isFiery = isDirect ? Math.random() < 0.35 : Math.random() < 0.12;
   const radius = rand(0.6, 1.15);
   const geo = new THREE.IcosahedronGeometry(radius, 0);
   // 背景に溶け込んで見失わないよう、岩石隕石も明るめの色＋わずかな発光を持たせる
@@ -798,6 +808,58 @@ function updateMeteors(dt) {
 }
 
 /* =========================================================================
+   画面外警告：着弾軌道の隕石が画面外にあり、かつある程度接近したら
+   画面端に矢印を表示して知らせる
+   ========================================================================= */
+const WARN_POOL_SIZE = 5;
+const warnPool = [];
+{
+  const appEl = document.getElementById('app');
+  for (let i = 0; i < WARN_POOL_SIZE; i++) {
+    const el = document.createElement('div');
+    el.className = 'edge-warn';
+    appEl.appendChild(el);
+    warnPool.push(el);
+  }
+}
+
+function computeEdgeIndicator(worldPos, margin) {
+  camera.getWorldDirection(_camFwd);
+  _tmpV.copy(worldPos).sub(camera.position);
+  const inFront = _tmpV.dot(_camFwd) > 0.05;
+  const ndc = worldPos.clone().project(camera);
+  let dx = ndc.x, dy = ndc.y;
+  if (!inFront) { dx = -dx || 0.0001; dy = -dy || 0.0001; }
+  if (inFront && Math.abs(ndc.x) <= margin && Math.abs(ndc.y) <= margin) return null; // 画面内に見えているので不要
+  if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) dx = 0.0001;
+  const t = Math.min(margin / Math.max(Math.abs(dx), 1e-5), margin / Math.max(Math.abs(dy), 1e-5));
+  const cx = dx * t, cy = dy * t;
+  const sx = (cx * 0.5 + 0.5) * window.innerWidth;
+  const sy = (1 - (cy * 0.5 + 0.5)) * window.innerHeight;
+  const angle = Math.atan2(sy - window.innerHeight / 2, sx - window.innerWidth / 2);
+  return { x: sx, y: sy, angle };
+}
+
+function updateEdgeWarnings() {
+  let used = 0;
+  if (state.phase === 'playing') {
+    for (let i = 0; i < meteors.length && used < WARN_POOL_SIZE; i++) {
+      const m = meteors[i];
+      if (!m.isDirect || m.t < 0.28) continue; // ある程度近づいたものだけ知らせる
+      const ind = computeEdgeIndicator(m.mesh.position, 0.92);
+      if (!ind) continue;
+      const el = warnPool[used++];
+      el.style.display = 'block';
+      el.style.left = ind.x + 'px';
+      el.style.top = ind.y + 'px';
+      el.style.transform = `translate(-50%,-50%) rotate(${ind.angle}rad)`;
+      el.style.opacity = String(0.5 + 0.5 * Math.min(1, (m.t - 0.28) / 0.5));
+    }
+  }
+  for (let i = used; i < WARN_POOL_SIZE; i++) warnPool[i].style.display = 'none';
+}
+
+/* =========================================================================
    発射・命中判定
    ========================================================================= */
 let fireCooldownTimer = 0;
@@ -822,12 +884,19 @@ function fireInput() {
   statusLights.forEach(l => { l.material.emissiveIntensity = 3.5; });
   playFireSound();
 
-  // 判定：カメラの実際の向き（=レティクル方向）と各隕石への方向の角度差
-  let bestIndex = -1, bestAngle = HIT_TOLERANCE;
+  // 判定：隕石が画面上のレティクル（照準の丸）の中に入っているかどうかで判定する
+  const centerX = window.innerWidth / 2, centerY = window.innerHeight / 2;
+  let bestIndex = -1, bestDist = RETICLE_HIT_RADIUS_PX;
   for (let i = 0; i < meteors.length; i++) {
-    const toM = meteors[i].mesh.position.clone().sub(camera.position).normalize();
-    const angle = Math.acos(clamp(fireDir.dot(toM), -1, 1));
-    if (angle < bestAngle) { bestAngle = angle; bestIndex = i; }
+    const mpos = meteors[i].mesh.position;
+    _tmpV.copy(mpos).sub(camera.position);
+    if (_tmpV.dot(fireDir) <= 0) continue; // 背後にあるものは除外
+    const ndc = mpos.clone().project(camera);
+    if (ndc.z > 1 || ndc.z < -1) continue;
+    const sx = (ndc.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (1 - (ndc.y * 0.5 + 0.5)) * window.innerHeight;
+    const dist = Math.hypot(sx - centerX, sy - centerY);
+    if (dist < bestDist) { bestDist = dist; bestIndex = i; }
   }
   if (bestIndex >= 0) destroyMeteor(bestIndex);
 }
@@ -1034,9 +1103,9 @@ let spawnTimer = 1.2;
 function getDifficulty() {
   const p = clamp(playElapsed / TOTAL_TIME, 0, 1);
   return {
-    interval: lerpNum(2.1, 1.0, p),
-    speed: lerpNum(5.5, 10, p),   // ゆっくり飛んでくるように減速いたしました
-    directRatio: lerpNum(0.55, 0.8, p),
+    interval: lerpNum(3.2, 1.6, p),
+    speed: lerpNum(4, 7, p),   // さらにゆっくり飛んでくるように調整いたしました
+    directRatio: lerpNum(0.5, 0.75, p),
   };
 }
 
@@ -1188,6 +1257,7 @@ function tick(now) {
 
     if (state.timeLeft <= 0) triggerWin();
   }
+  updateEdgeWarnings();
 
   updateHUD();
   renderer.render(scene, camera);
