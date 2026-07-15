@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>隕石迎撃システム</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg-void:#04060a;
+    --panel:rgba(18,22,27,0.86);
+    --panel-border:#3a4048;
+    --accent-amber:#ffb020;
+    --accent-amber-dim:#8a6417;
+    --accent-red:#ff3b30;
+    --accent-green:#4ce08a;
+    --text-primary:#e9e6dd;
+    --text-dim:#9aa0a6;
+  }
+
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg-void);
+    overflow:hidden;
+    overscroll-behavior:none;
+    touch-action:manipulation;
+    font-family:'BIZ UDPGothic','Hiragino Sans','Yu Gothic',sans-serif;
+    color:var(--text-primary);
+    user-select:none;
+    -webkit-user-select:none;
+  }
+
+  #app{ position:fixed; inset:0; width:100%; height:100%; }
+  #canvas-wrap{ position:absolute; inset:0; }
+  #canvas-wrap canvas{ display:block; width:100%; height:100%; }
+
+  /* ==== 画面演出レイヤー ==== */
+  #vignette{
+    position:absolute; inset:0; pointer-events:none; z-index:5;
+    box-shadow: inset 0 0 18vw 2vw rgba(0,0,0,0.75);
+  }
+  #hitFlash{
+    position:absolute; inset:0; pointer-events:none; z-index:6;
+    background:radial-gradient(ellipse at center, rgba(255,59,48,0.05) 0%, rgba(255,59,48,0.55) 100%);
+    opacity:0; transition:opacity 0.08s linear;
+  }
+
+  /* ==== HUDパネル共通 ==== */
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:6px;
+    padding:6px 12px;
+    backdrop-filter: blur(2px);
+    position:relative;
+  }
+  .panel::before{
+    content:''; position:absolute; top:3px; left:3px; width:5px; height:5px;
+    background:var(--accent-amber-dim); border-radius:50%;
+  }
+  .panel-label{
+    font-size:11px; letter-spacing:0.15em; color:var(--text-dim); margin-bottom:2px;
+  }
+
+  #hud-top{
+    position:absolute; top:calc(10px + env(safe-area-inset-top)); left:0; right:0;
+    display:flex; justify-content:center; gap:10px; z-index:8;
+    pointer-events:none;
+  }
+  .life-panel{ width:min(56vw,340px); }
+  .life-track{
+    position:relative; height:16px; border-radius:3px; overflow:hidden;
+    background:#1a1a1a; border:1px solid #000;
+  }
+  .life-fill{
+    position:absolute; left:0; top:0; bottom:0; width:100%;
+    transform-origin:left center;
+    background:linear-gradient(to right, var(--accent-green) 0%, var(--accent-green) 55%, var(--accent-amber) 78%, var(--accent-red) 100%);
+    transition:transform 0.25s ease-out;
+  }
+  .life-ticks{
+    position:absolute; inset:0;
+    background-image:repeating-linear-gradient(to right, rgba(0,0,0,0.35) 0 1px, transparent 1px 12.5%);
+  }
+  .timer-panel, .score-panel{ min-width:70px; text-align:center; }
+  .timer-text, .score-text{ font-size:22px; font-weight:700; line-height:1; color:var(--accent-amber); }
+  .timer-text.warn{ color:var(--accent-red); animation:pulseWarn 0.5s infinite; }
+  @keyframes pulseWarn{ 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+  /* ==== 照準レティクル ==== */
+  #reticle{
+    position:absolute; left:50%; top:50%; width:56px; height:56px;
+    transform:translate(-50%,-50%); pointer-events:none; z-index:7;
+  }
+  .reticle-ring{
+    position:absolute; inset:0; border:1.5px solid rgba(255,176,32,0.75); border-radius:50%;
+  }
+  .reticle-ring::after{
+    content:''; position:absolute; inset:-10px; border:1px dashed rgba(255,176,32,0.3); border-radius:50%;
+  }
+  .reticle-cross{ position:absolute; inset:0; }
+  .reticle-cross::before, .reticle-cross::after{
+    content:''; position:absolute; background:rgba(255,176,32,0.85);
+  }
+  .reticle-cross::before{ left:50%; top:-6px; bottom:-6px; width:1.5px; transform:translateX(-50%); }
+  .reticle-cross::after{ top:50%; left:-6px; right:-6px; height:1.5px; transform:translateY(-50%); }
+
+  /* ==== 左：仮想スティック ==== */
+  #stickZone{
+    position:absolute; left:calc(18px + env(safe-area-inset-left)); bottom:calc(18px + env(safe-area-inset-bottom));
+    width:150px; height:150px; z-index:9;
+    touch-action:none;
+  }
+  #stickBase{
+    position:relative; width:100%; height:100%; border-radius:50%;
+    background:radial-gradient(circle at 50% 40%, rgba(60,66,74,0.55), rgba(10,12,15,0.75));
+    border:2px solid var(--panel-border);
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.6), 0 0 0 6px rgba(255,176,32,0.05);
+  }
+  #stickKnob{
+    position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px 0 0 -28px;
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #6b7078, #2c3036 70%);
+    border:1px solid #14171a;
+    box-shadow:0 3px 6px rgba(0,0,0,0.5);
+  }
+  #stickKnob::after{
+    content:''; position:absolute; left:50%; top:50%; width:10px; height:10px; margin:-5px 0 0 -5px;
+    border-radius:50%; background:var(--accent-amber); opacity:0.85;
+  }
+
+  /* ==== 右：発射ボタン ==== */
+  #fireBtn{
+    position:absolute; right:calc(24px + env(safe-area-inset-right)); bottom:calc(28px + env(safe-area-inset-bottom));
+    width:96px; height:96px; border-radius:50%; z-index:9;
+    background:radial-gradient(circle at 35% 30%, #7a2620, #4a1512 65%, #2c0d0b 100%);
+    border:3px solid #1a0a08;
+    box-shadow:0 0 0 4px rgba(255,59,48,0.12), 0 4px 10px rgba(0,0,0,0.6);
+    touch-action:none;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--text-primary);
+    font-family:inherit;
+  }
+  #fireBtn:active, #fireBtn.pressed{
+    transform:scale(0.92);
+    box-shadow:0 0 0 8px rgba(255,140,32,0.22), 0 2px 6px rgba(0,0,0,0.6);
+  }
+  .fire-btn-label{ font-size:16px; font-weight:700; letter-spacing:0.1em; }
+
+  /* ==== オーバーレイ ==== */
+  .overlay{
+    position:absolute; inset:0; z-index:20;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(2,3,5,0.72);
+    transition:opacity 0.35s ease;
+  }
+  .overlay.hidden{ opacity:0; pointer-events:none; }
+  .overlay-panel{
+    background:var(--panel); border:1px solid var(--panel-border); border-radius:10px;
+    padding:32px 28px; max-width:min(86vw,420px); text-align:center;
+  }
+  .overlay-panel h1{
+    margin:0 0 12px; font-size:26px; color:var(--accent-amber); letter-spacing:0.06em;
+  }
+  .overlay-panel p{
+    margin:0 0 20px; font-size:14px; line-height:1.7; color:var(--text-dim);
+  }
+  .overlay-btn{
+    font-family:inherit; font-size:16px; font-weight:700; letter-spacing:0.08em;
+    padding:14px 30px; min-height:44px; border-radius:6px; border:1px solid var(--accent-amber-dim);
+    background:linear-gradient(#3a2f16,#1c1710); color:var(--accent-amber);
+  }
+  .overlay-btn:active{ transform:scale(0.96); }
+</style>
+</head>
+<body>
+<!-- build: 2026-07-15 -->
+<div id="app">
+  <div id="canvas-wrap"></div>
+  <div id="vignette"></div>
+  <div id="hitFlash"></div>
+
+  <div id="hud-top">
+    <div class="panel life-panel">
+      <div class="panel-label">耐久</div>
+      <div class="life-track"><div id="lifeFill" class="life-fill"></div><div class="life-ticks"></div></div>
+    </div>
+    <div class="panel timer-panel">
+      <div class="panel-label">残り時間</div>
+      <div id="timerText" class="timer-text">90</div>
+    </div>
+    <div class="panel score-panel">
+      <div class="panel-label">撃墜数</div>
+      <div id="scoreText" class="score-text">0</div>
+    </div>
+  </div>
+
+  <div id="reticle"><div class="reticle-ring"></div><div class="reticle-cross"></div></div>
+
+  <div id="stickZone"><div id="stickBase"><div id="stickKnob"></div></div></div>
+
+  <button id="fireBtn" aria-label="発射"><span class="fire-btn-label">発射</span></button>
+
+  <div id="startOverlay" class="overlay">
+    <div class="overlay-panel">
+      <h1>隕石迎撃システム</h1>
+      <p>左のレバーで砲台を操作し、右のボタンで発射いたします。<br>90秒間、迫り来る隕石から砲台を守り抜いてください。</p>
+      <button id="startBtn" class="overlay-btn">起動</button>
+    </div>
+  </div>
+
+  <div id="endOverlay" class="overlay hidden">
+    <div class="overlay-panel">
+      <h1 id="endTitle">防衛成功</h1>
+      <p id="endSubtitle">90秒間、生存いたしました。</p>
+      <button id="retryBtn" class="overlay-btn">再挑戦</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+
+/* =========================================================================
+   隕石迎撃システム — ゲーム本体
+   ---------------------------------------------------------------------
+   設計方針（簡略化版）:
+   ・砲台の照準は角度パラメータ(yaw/pitch)を1つだけ保持し、
+     カメラの向き・砲身メッシュの向き・当たり判定の基準方向は
+     すべて同じ「イージング済み角度」を共有する。
+     → 見た目の重厚な遅れがそのまま照準のフィーリングになり、
+       レティクル（画面中央）と実際の判定方向が常に一致する。
+   ・隕石の移動は角度パラメータではなく、スポーン地点→目標地点の
+     直線補間（Vector3.lerp）のみで駆動する。毎フレームの位置は
+     entity.mesh.position に直接反映されており、テスト時はそのまま
+     .position を参照すればよい。
+   ========================================================================= */
+
+/* ---------- 基礎ユーティリティ ---------- */
+const deg = (d) => d * Math.PI / 180;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerpNum = (a, b, t) => a + (b - a) * t;
+const rand = (a, b) => a + Math.random() * (b - a);
+
+/* ---------- 定数 ---------- */
+const YAW_MAX = deg(60);      // 左右可動範囲（片側60度、合計120度）
+const PITCH_MAX = deg(45);    // 上方向可動範囲
+const TOTAL_TIME = 90;        // 生存目標秒数
+const MAX_LIFE = 100;
+const DAMAGE_PER_HIT = 22;
+const SPAWN_RADIUS = 52;
+const HIT_TOLERANCE = deg(4.2); // 発射時の命中許容角
+const FIRE_COOLDOWN = 0.34;     // 重厚な単発砲のためのクールダウン
+
+/* ---------- DOM参照 ---------- */
+const canvasWrap = document.getElementById('canvas-wrap');
+const stickZone = document.getElementById('stickZone');
+const stickBase = document.getElementById('stickBase');
+const stickKnob = document.getElementById('stickKnob');
+const fireBtn = document.getElementById('fireBtn');
+const lifeFill = document.getElementById('lifeFill');
+const timerText = document.getElementById('timerText');
+const scoreText = document.getElementById('scoreText');
+const hitFlashEl = document.getElementById('hitFlash');
+const startOverlay = document.getElementById('startOverlay');
+const endOverlay = document.getElementById('endOverlay');
+const endTitle = document.getElementById('endTitle');
+const endSubtitle = document.getElementById('endSubtitle');
+const startBtn = document.getElementById('startBtn');
+const retryBtn = document.getElementById('retryBtn');
+
+/* =========================================================================
+   iPad Safari 対応（ダブルタップズーム・ピンチ・バウンス防止）
+   ========================================================================= */
+document.addEventListener('gesturestart', (e) => e.preventDefault());
+document.addEventListener('gesturechange', (e) => e.preventDefault());
+let lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => {
+  const now = Date.now();
+  if (now - lastTouchEnd <= 300) e.preventDefault();
+  lastTouchEnd = now;
+}, { passive: false });
+document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+
+/* =========================================================================
+   Three.js セットアップ
+   ========================================================================= */
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+canvasWrap.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+// 夕暮れ〜夜明け前の薄明るい空を基調とし、暗すぎないようにいたします
+scene.background = new THREE.Color(0x2b3a55);
+scene.fog = new THREE.FogExp2(0x3a4a68, 0.0038);
+
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 500);
+// 砲台の旋回・仰角の回転中心（＝隕石が狙ってくる標的でもある）
+const PIVOT_POS = new THREE.Vector3(0, 1.4, 0);
+// 三人称チェイスカメラのパラメータ：自分（砲台）を後方・上方から見る視点にいたします
+const CHASE_DISTANCE = 7.2;
+const CHASE_HEIGHT = 3.1;
+const cameraBasePos = new THREE.Vector3();
+const cameraLookTarget = new THREE.Vector3();
+camera.position.set(0, CHASE_HEIGHT + PIVOT_POS.y, CHASE_DISTANCE);
+camera.lookAt(PIVOT_POS);
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+/* ---------- 光源（全体を明るく、夕景の暖色を強めにいたします） ---------- */
+scene.add(new THREE.HemisphereLight(0x6f8fc4, 0x2a2018, 1.25));
+const duskLight = new THREE.DirectionalLight(0xffb37a, 0.95);
+duskLight.position.set(-40, 22, -15);
+scene.add(duskLight);
+const fillLight = new THREE.DirectionalLight(0x5d7fb0, 0.4);
+fillLight.position.set(30, 18, 30);
+scene.add(fillLight);
+
+const muzzleLight = new THREE.PointLight(0xffcf8a, 0, 14, 2);
+scene.add(muzzleLight);
+
+/* ---------- 生成テクスチャ（外部ファイル不使用） ---------- */
+function makeGlowTexture() {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.4, 'rgba(255,220,150,0.85)');
+  g.addColorStop(1, 'rgba(255,180,60,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+const glowTex = makeGlowTexture();
+
+function makeGridTexture() {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#1c2029'; ctx.fillRect(0, 0, 512, 512);
+  ctx.strokeStyle = 'rgba(255,176,32,0.26)'; ctx.lineWidth = 2;
+  for (let i = 0; i <= 512; i += 64) {
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 512); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(512, i); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(14, 14);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/* ---------- 空（グラデーションドーム：地平線が視認でき、角度把握の手がかりになる） ---------- */
+function makeSkyDome() {
+  const radius = 280;
+  const geo = new THREE.SphereGeometry(radius, 32, 20);
+  const pos = geo.attributes.position;
+  const topColor = new THREE.Color(0x0b1330);
+  const midColor = new THREE.Color(0x2c3f66);
+  const horizonColor = new THREE.Color(0xdf9256);
+  const belowColor = new THREE.Color(0x1a1410);
+  const colors = [];
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i) / radius;
+    let c;
+    if (y > 0.12) {
+      c = midColor.clone().lerp(topColor, clamp((y - 0.12) / 0.9, 0, 1));
+    } else if (y > -0.02) {
+      c = horizonColor.clone().lerp(midColor, clamp((y + 0.02) / 0.14, 0, 1));
+    } else {
+      c = horizonColor.clone().lerp(belowColor, clamp(-y * 3, 0, 1));
+    }
+    colors.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
+  return new THREE.Mesh(geo, mat);
+}
+scene.add(makeSkyDome());
+
+/* ---------- 山の稜線（地平線の目印。奥・手前2層で奥行きを出す） ---------- */
+function makeMountainRing(radius, height, segments, color, seedOffset) {
+  const positions = [];
+  const indices = [];
+  const heights = [];
+  for (let i = 0; i <= segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const h = height * (0.35
+      + Math.sin(a * 3.1 + seedOffset) * 0.28
+      + Math.sin(a * 7.3 + seedOffset * 1.7) * 0.16
+      + Math.sin(a * 13.0 + seedOffset * 2.3) * 0.09);
+    heights.push(Math.max(height * 0.12, h));
+  }
+  for (let i = 0; i <= segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const x = Math.cos(a) * radius, z = Math.sin(a) * radius;
+    positions.push(x, -6, z);
+    positions.push(x, heights[i], z);
+  }
+  for (let i = 0; i < segments; i++) {
+    const a0 = i * 2, b0 = a0 + 1, a1 = a0 + 2, b1 = a0 + 3;
+    indices.push(a0, a1, b0, b0, a1, b1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  const mat = new THREE.MeshBasicMaterial({ color, fog: true });
+  return new THREE.Mesh(geo, mat);
+}
+scene.add(makeMountainRing(210, 46, 48, 0x2a3550, 0.4));   // 遠景（霞んだ稜線）
+scene.add(makeMountainRing(150, 34, 40, 0x171c2c, 3.1));   // 近景（濃い稜線）
+
+/* ---------- 地面（防衛拠点プラットフォーム） ---------- */
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(90, 48),
+  new THREE.MeshStandardMaterial({ map: makeGridTexture(), roughness: 0.95, metalness: 0.1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.02;
+scene.add(ground);
+
+/* ---------- 星空（上空のみ・控えめに） ---------- */
+{
+  const starCount = 500;
+  const positions = new Float32Array(starCount * 3);
+  for (let i = 0; i < starCount; i++) {
+    const r = rand(150, 270);
+    const theta = rand(0, Math.PI * 2);
+    const phi = rand(0.05, Math.PI / 2.8);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.cos(phi) + 20;
+    positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+  }
+  const starGeo = new THREE.BufferGeometry();
+  starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const starMat = new THREE.PointsMaterial({ color: 0xd8e2ff, size: 1.3, sizeAttenuation: false, transparent: true, opacity: 0.65 });
+  scene.add(new THREE.Points(starGeo, starMat));
+}
+
+/* =========================================================================
+   砲台モデル（プリミティブ組み合わせ / 外部アセット不使用）
+   ========================================================================= */
+const metalDark = new THREE.MeshStandardMaterial({ color: 0x2a2e33, roughness: 0.55, metalness: 0.65 });
+const metalMid = new THREE.MeshStandardMaterial({ color: 0x3d434b, roughness: 0.5, metalness: 0.6 });
+const amberEmissive = new THREE.MeshStandardMaterial({ color: 0x331f05, emissive: 0xff9d1f, emissiveIntensity: 1.2, roughness: 0.4 });
+
+const turretBase = new THREE.Group();
+scene.add(turretBase);
+
+const ring = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.6, 0.6, 20), metalDark);
+ring.position.y = 0.3;
+turretBase.add(ring);
+
+const beacons = [];
+for (let i = 0; i < 6; i++) {
+  const a = (i / 6) * Math.PI * 2;
+  const b = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), amberEmissive.clone());
+  b.position.set(Math.cos(a) * 2.15, 0.62, Math.sin(a) * 2.15);
+  turretBase.add(b);
+  beacons.push(b);
+}
+
+const yawPivot = new THREE.Group();
+yawPivot.position.y = 0.95;
+turretBase.add(yawPivot);
+
+const pitchPivot = new THREE.Group();
+pitchPivot.position.y = 0.45;
+yawPivot.add(pitchPivot);
+
+const barrelGroup = new THREE.Group();
+pitchPivot.add(barrelGroup);
+
+const breech = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.1, 1.3), metalMid);
+breech.position.set(0, 0.1, 0.3);
+barrelGroup.add(breech);
+
+for (let i = 0; i < 5; i++) {
+  const rivet = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), metalDark);
+  rivet.position.set(rand(-0.6, 0.6), rand(-0.3, 0.5), 0.95);
+  barrelGroup.add(rivet);
+}
+
+const sidePlateGeo = new THREE.BoxGeometry(0.22, 0.85, 1.6);
+const plateL = new THREE.Mesh(sidePlateGeo, metalDark);
+plateL.position.set(-0.86, 0.05, 0.2);
+barrelGroup.add(plateL);
+const plateR = plateL.clone();
+plateR.position.x = 0.86;
+barrelGroup.add(plateR);
+
+const indicatorL = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), amberEmissive.clone());
+indicatorL.position.set(-0.5, 0.55, 0.8);
+barrelGroup.add(indicatorL);
+const indicatorR = indicatorL.clone();
+indicatorR.position.x = 0.5;
+barrelGroup.add(indicatorR);
+const statusLights = [indicatorL, indicatorR];
+
+const barrelTube = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.26, 3.3, 14), metalMid);
+barrelTube.rotation.x = Math.PI / 2;
+barrelTube.position.set(0, 0.1, -1.55);
+barrelGroup.add(barrelTube);
+
+const muzzleTip = new THREE.Object3D();
+muzzleTip.position.set(0, 0.1, -3.25);
+barrelGroup.add(muzzleTip);
+
+/* =========================================================================
+   入力：仮想アナログスティック
+   ========================================================================= */
+const stickRaw = { x: 0, y: 0 }; // -1..1
+let stickPointerId = null;
+let stickMaxPx = 47;
+
+function measureStick() {
+  const rect = stickBase.getBoundingClientRect();
+  stickMaxPx = rect.width / 2 - 6;
+}
+measureStick();
+window.addEventListener('resize', measureStick);
+
+function applyStickFromClient(cx, cy) {
+  const rect = stickBase.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  let dx = cx - centerX, dy = cy - centerY;
+  const dist = Math.min(Math.hypot(dx, dy), stickMaxPx);
+  const angle = Math.atan2(dy, dx);
+  dx = Math.cos(angle) * dist; dy = Math.sin(angle) * dist;
+  stickRaw.x = dx / stickMaxPx;
+  stickRaw.y = dy / stickMaxPx;
+  stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+}
+
+stickBase.addEventListener('pointerdown', (e) => {
+  stickPointerId = e.pointerId;
+  stickBase.setPointerCapture(e.pointerId);
+  applyStickFromClient(e.clientX, e.clientY);
+});
+window.addEventListener('pointermove', (e) => {
+  if (e.pointerId === stickPointerId) applyStickFromClient(e.clientX, e.clientY);
+});
+function releaseStickPointer(e) {
+  if (e.pointerId === stickPointerId) stickPointerId = null;
+}
+window.addEventListener('pointerup', releaseStickPointer);
+window.addEventListener('pointercancel', releaseStickPointer);
+
+function updateStick(dt) {
+  if (stickPointerId === null) {
+    const k = 1 - Math.exp(-12 * dt);
+    stickRaw.x += (0 - stickRaw.x) * k;
+    stickRaw.y += (0 - stickRaw.y) * k;
+    if (Math.abs(stickRaw.x) < 0.001) stickRaw.x = 0;
+    if (Math.abs(stickRaw.y) < 0.001) stickRaw.y = 0;
+    stickKnob.style.transform = `translate(${stickRaw.x * stickMaxPx}px, ${stickRaw.y * stickMaxPx}px)`;
+  }
+  const deadzone = 0.04;
+  const sx = Math.abs(stickRaw.x) < deadzone ? 0 : stickRaw.x;
+  const syUp = clamp(-stickRaw.y, 0, 1);
+  turret.yawRaw = sx * YAW_MAX;
+  turret.pitchRaw = (syUp < deadzone ? 0 : syUp) * PITCH_MAX;
+}
+
+/* =========================================================================
+   砲台の状態（イージング角度を camera / barrel / 判定 が共有）
+   ========================================================================= */
+const turret = { yawRaw: 0, pitchRaw: 0, yawEased: 0, pitchEased: 0, recoil: 0 };
+
+const currentAimDir = new THREE.Vector3(0, 0, -1);
+
+function updateTurret(dt) {
+  const rate = (state.phase === 'win') ? 1.4 : 4.4;
+  const k = 1 - Math.exp(-rate * dt);
+  turret.yawEased += (turret.yawRaw - turret.yawEased) * k;
+  turret.pitchEased += (turret.pitchRaw - turret.pitchEased) * k;
+
+  yawPivot.rotation.y = -turret.yawEased;
+  pitchPivot.rotation.x = turret.pitchEased;
+
+  // 反動バネ
+  turret.recoil += (0 - turret.recoil) * Math.min(1, dt * 9);
+  barrelGroup.position.z = turret.recoil;
+
+  // 砲台と同じイージング角度から実際の照準方向を求める
+  // （＝カメラの向き・当たり判定の基準方向もこの1つの角度から導出する）
+  currentAimDir.set(0, 0, -1).applyEuler(new THREE.Euler(turret.pitchEased, -turret.yawEased, 0, 'YXZ'));
+}
+
+/* 三人称チェイスカメラ：自分（砲台）を後方・上方から見る視点。
+   水平方向のみ砲台の背後を追従し、仰角は視線先（注視点）にのみ反映することで
+   見上げる動作でもカメラが地面に潜り込まないようにいたします。 */
+function updateCameraChase() {
+  const flat = new THREE.Vector3(currentAimDir.x, 0, currentAimDir.z);
+  if (flat.lengthSq() < 1e-6) flat.set(0, 0, -1); else flat.normalize();
+  cameraBasePos.copy(PIVOT_POS).addScaledVector(flat, -CHASE_DISTANCE);
+  cameraBasePos.y = PIVOT_POS.y + CHASE_HEIGHT;
+  cameraLookTarget.copy(PIVOT_POS).addScaledVector(currentAimDir, 45);
+}
+
+/* =========================================================================
+   パーティクル（爆発・マズルフラッシュ・トレイル共通）
+   ========================================================================= */
+const particles = [];
+function spawnParticles(pos, opts = {}) {
+  const { count = 14, color = 0xffb020, speed = 6, life = 0.6, size = 0.35, gravity = -3 } = opts;
+  for (let i = 0; i < count; i++) {
+    const mat = new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const spr = new THREE.Sprite(mat);
+    spr.position.copy(pos);
+    const s = size * (0.6 + Math.random() * 0.9);
+    spr.scale.set(s, s, 1);
+    scene.add(spr);
+    const dir = new THREE.Vector3(rand(-1, 1), rand(-0.3, 1), rand(-1, 1)).normalize();
+    const vel = dir.multiplyScalar(speed * (0.4 + Math.random() * 0.9));
+    particles.push({ sprite: spr, vel, life, maxLife: life, gravity });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) {
+      scene.remove(p.sprite); p.sprite.material.dispose();
+      particles.splice(i, 1); continue;
+    }
+    p.vel.y += p.gravity * dt;
+    p.sprite.position.addScaledVector(p.vel, dt);
+    p.sprite.material.opacity = p.life / p.maxLife;
+    const sc = p.sprite.scale.x * (1 - dt * 0.5);
+    p.sprite.scale.set(sc, sc, 1);
+  }
+}
+
+/* ---------- トレーサー（発射の軌跡） ---------- */
+const tracers = [];
+function spawnTracer(originPos, dir) {
+  const len = 20;
+  const geo = new THREE.CylinderGeometry(0.02, 0.07, len, 6, 1, true);
+  geo.rotateX(Math.PI / 2);
+  geo.translate(0, 0, -len / 2);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffcf6b, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(originPos);
+  mesh.lookAt(originPos.clone().add(dir));
+  scene.add(mesh);
+  tracers.push({ mesh, life: 0.09, maxLife: 0.09 });
+}
+function updateTracers(dt) {
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    const t = tracers[i];
+    t.life -= dt;
+    if (t.life <= 0) { scene.remove(t.mesh); t.mesh.material.dispose(); tracers.splice(i, 1); continue; }
+    t.mesh.material.opacity = 0.85 * (t.life / t.maxLife);
+  }
+}
+
+/* =========================================================================
+   隕石
+   ========================================================================= */
+const meteors = [];
+let meteorIdSeq = 1;
+
+function spawnDirection(yaw, pitch) {
+  const dir = new THREE.Vector3(0, 0, -1);
+  dir.applyEuler(new THREE.Euler(pitch, -yaw, 0, 'YXZ'));
+  return dir;
+}
+
+function spawnMeteor(diff) {
+  const yaw = rand(-YAW_MAX, YAW_MAX);
+  const pitch = rand(0, PITCH_MAX);
+  const dir = spawnDirection(yaw, pitch);
+  const spawnPos = PIVOT_POS.clone().add(dir.clone().multiplyScalar(SPAWN_RADIUS));
+
+  const isDirect = Math.random() < diff.directRatio;
+  let targetPos;
+  if (isDirect) {
+    targetPos = PIVOT_POS.clone();
+  } else {
+    const flyPast = dir.clone().multiplyScalar(SPAWN_RADIUS + rand(30, 55));
+    const lateral = new THREE.Vector3(rand(-22, 22), rand(-4, 16), rand(-22, 22));
+    targetPos = PIVOT_POS.clone().add(flyPast).add(lateral);
+  }
+
+  const isFiery = isDirect ? Math.random() < 0.7 : Math.random() < 0.25;
+  const radius = rand(0.6, 1.15);
+  const geo = new THREE.IcosahedronGeometry(radius, 0);
+  // 背景に溶け込んで見失わないよう、岩石隕石も明るめの色＋わずかな発光を持たせる
+  const mat = isFiery
+    ? new THREE.MeshStandardMaterial({ color: 0x5a2a12, emissive: 0xff6a2e, emissiveIntensity: 1.5, roughness: 0.7, metalness: 0.05 })
+    : new THREE.MeshStandardMaterial({ color: 0x9a9184, emissive: 0x2c3550, emissiveIntensity: 0.4, roughness: 0.9, metalness: 0.05 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(spawnPos);
+  mesh.scale.setScalar(0.15); // 出現時はポップインで一気に視認させる
+  scene.add(mesh);
+
+  // 出現の瞬間を目立たせるフラッシュ
+  spawnParticles(spawnPos, {
+    count: 10, color: isFiery ? 0xffb060 : 0xcfe0ff,
+    speed: 2.5, life: 0.45, size: 0.7, gravity: 0,
+  });
+
+  const distance = spawnPos.distanceTo(targetPos);
+  const speed = diff.speed * rand(0.85, 1.15);
+
+  meteors.push({
+    id: meteorIdSeq++,
+    mesh,
+    position: mesh.position,
+    spawnPos, targetPos,
+    t: 0,
+    travelTime: distance / speed,
+    isDirect,
+    isFiery,
+    alive: true,
+    spinX: rand(-2.5, 2.5), spinY: rand(-2.5, 2.5),
+    trailTimer: 0,
+    popInTimer: 0.35,
+  });
+}
+
+function removeMeteor(index) {
+  const m = meteors[index];
+  scene.remove(m.mesh);
+  m.mesh.geometry.dispose();
+  m.mesh.material.dispose();
+  meteors.splice(index, 1);
+}
+
+function destroyMeteor(index) {
+  const m = meteors[index];
+  spawnParticles(m.mesh.position, {
+    count: 18, color: m.isFiery ? 0xff8a3d : 0xd9c9a8,
+    speed: 7, life: 0.7, size: 0.4, gravity: -4,
+  });
+  playExplosionSound(false);
+  state.score += 1;
+  removeMeteor(index);
+}
+
+function updateMeteors(dt) {
+  for (let i = meteors.length - 1; i >= 0; i--) {
+    const m = meteors[i];
+    m.t += dt / m.travelTime;
+    if (m.t >= 1) {
+      if (m.isDirect) {
+        playerHit(m.mesh.position);
+      }
+      removeMeteor(i);
+      continue;
+    }
+    m.mesh.position.lerpVectors(m.spawnPos, m.targetPos, m.t);
+    m.mesh.rotation.x += m.spinX * dt;
+    m.mesh.rotation.y += m.spinY * dt;
+
+    if (m.popInTimer > 0) {
+      m.popInTimer = Math.max(0, m.popInTimer - dt);
+      const p = 1 - m.popInTimer / 0.35;
+      const s = 0.15 + 0.85 * Math.min(1, p * 1.3); // 少しオーバーシュート気味に拡大
+      m.mesh.scale.setScalar(Math.min(1.08, s));
+      if (m.popInTimer === 0) m.mesh.scale.setScalar(1);
+    }
+
+    if (m.isFiery) {
+      m.trailTimer -= dt;
+      if (m.trailTimer <= 0) {
+        m.trailTimer = 0.035;
+        spawnParticles(m.mesh.position, { count: 1, color: 0xff7a2e, speed: 0.6, life: 0.35, size: 0.5, gravity: 0.5 });
+      }
+    }
+  }
+}
+
+/* =========================================================================
+   発射・命中判定
+   ========================================================================= */
+let fireCooldownTimer = 0;
+
+function fireInput() {
+  if (state.phase !== 'playing') return;
+  if (fireCooldownTimer > 0) return;
+  fireCooldownTimer = FIRE_COOLDOWN;
+
+  ensureAudio();
+
+  const tipWorld = new THREE.Vector3();
+  muzzleTip.getWorldPosition(tipWorld);
+  const fireDir = new THREE.Vector3();
+  camera.getWorldDirection(fireDir);
+
+  turret.recoil = 0.32;
+  muzzleLight.position.copy(tipWorld);
+  muzzleLight.intensity = 6.5;
+  spawnParticles(tipWorld, { count: 7, color: 0xfff2c0, speed: 3.2, life: 0.14, size: 0.5, gravity: 0 });
+  spawnTracer(tipWorld, fireDir);
+  statusLights.forEach(l => { l.material.emissiveIntensity = 3.5; });
+  playFireSound();
+
+  // 判定：カメラの実際の向き（=レティクル方向）と各隕石への方向の角度差
+  let bestIndex = -1, bestAngle = HIT_TOLERANCE;
+  for (let i = 0; i < meteors.length; i++) {
+    const toM = meteors[i].mesh.position.clone().sub(camera.position).normalize();
+    const angle = Math.acos(clamp(fireDir.dot(toM), -1, 1));
+    if (angle < bestAngle) { bestAngle = angle; bestIndex = i; }
+  }
+  if (bestIndex >= 0) destroyMeteor(bestIndex);
+}
+
+fireBtn.addEventListener('pointerdown', (e) => {
+  fireBtn.classList.add('pressed');
+  fireInput();
+});
+fireBtn.addEventListener('pointerup', () => fireBtn.classList.remove('pressed'));
+fireBtn.addEventListener('pointercancel', () => fireBtn.classList.remove('pressed'));
+
+/* =========================================================================
+   被弾・ライフ
+   ========================================================================= */
+let shakeAmount = 0;
+function shake(amount) { shakeAmount = Math.max(shakeAmount, amount); }
+
+function playerHit() {
+  state.life = clamp(state.life - DAMAGE_PER_HIT, 0, MAX_LIFE);
+  spawnParticles(PIVOT_POS, { count: 24, color: 0xff5a3d, speed: 8, life: 0.8, size: 0.5, gravity: -3 });
+  shake(1.0);
+  hitFlashEl.style.opacity = '1';
+  setTimeout(() => { hitFlashEl.style.opacity = '0'; }, 90);
+  playExplosionSound(true);
+  if (state.life <= 0) triggerLose();
+}
+
+function updateShake(dt) {
+  if (shakeAmount > 0.0005) shakeAmount *= Math.max(0, 1 - dt * 7);
+  else shakeAmount = 0;
+}
+
+/* =========================================================================
+   音声（Web Audio API のみで合成 / 外部音源ファイル不使用）
+   ========================================================================= */
+let audioCtx = null, masterGain = null, noiseBuffer = null;
+let humOsc = null, humGain = null;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.8;
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function getNoiseBuffer() {
+  if (!noiseBuffer) {
+    const sr = audioCtx.sampleRate;
+    noiseBuffer = audioCtx.createBuffer(1, sr * 1.2, sr);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  }
+  return noiseBuffer;
+}
+
+// 発射音：「ゴウーン」という重低音＋ブラストノイズ＋簡易残響
+function playFireSound() {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+
+  const osc = audioCtx.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(190, t0);
+  osc.frequency.exponentialRampToValueAtTime(44, t0 + 0.44);
+  const oscGain = audioCtx.createGain();
+  oscGain.gain.setValueAtTime(0.0001, t0);
+  oscGain.gain.exponentialRampToValueAtTime(0.9, t0 + 0.03);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.58);
+  osc.connect(oscGain);
+
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = getNoiseBuffer();
+  const noiseFilter = audioCtx.createBiquadFilter();
+  noiseFilter.type = 'bandpass';
+  noiseFilter.frequency.setValueAtTime(950, t0);
+  noiseFilter.frequency.exponentialRampToValueAtTime(130, t0 + 0.3);
+  noiseFilter.Q.value = 0.7;
+  const noiseGain = audioCtx.createGain();
+  noiseGain.gain.setValueAtTime(0.7, t0);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.26);
+  noise.connect(noiseFilter).connect(noiseGain);
+
+  const d1 = audioCtx.createDelay(); d1.delayTime.value = 0.085;
+  const d1g = audioCtx.createGain(); d1g.gain.value = 0.22;
+  const d2 = audioCtx.createDelay(); d2.delayTime.value = 0.16;
+  const d2g = audioCtx.createGain(); d2g.gain.value = 0.1;
+
+  oscGain.connect(masterGain);
+  noiseGain.connect(masterGain);
+  oscGain.connect(d1); d1.connect(d1g); d1g.connect(masterGain);
+  noiseGain.connect(d2); d2.connect(d2g); d2g.connect(masterGain);
+
+  osc.start(t0); osc.stop(t0 + 0.6);
+  noise.start(t0); noise.stop(t0 + 0.3);
+}
+
+// 爆発音（撃墜=小 / 被弾=大）
+function playExplosionSound(big) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const dur = big ? 0.85 : 0.4;
+
+  const osc = audioCtx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(big ? 90 : 130, t0);
+  osc.frequency.exponentialRampToValueAtTime(big ? 28 : 40, t0 + dur * 0.8);
+  const oscGain = audioCtx.createGain();
+  oscGain.gain.setValueAtTime(0.0001, t0);
+  oscGain.gain.exponentialRampToValueAtTime(big ? 1.0 : 0.55, t0 + 0.02);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(oscGain).connect(masterGain);
+
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = getNoiseBuffer();
+  const filt = audioCtx.createBiquadFilter();
+  filt.type = 'lowpass';
+  filt.frequency.setValueAtTime(big ? 2200 : 1400, t0);
+  filt.frequency.exponentialRampToValueAtTime(180, t0 + dur);
+  const noiseGain = audioCtx.createGain();
+  noiseGain.gain.setValueAtTime(big ? 0.8 : 0.45, t0);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + dur * 0.7);
+  noise.connect(filt).connect(noiseGain).connect(masterGain);
+
+  osc.start(t0); osc.stop(t0 + dur + 0.05);
+  noise.start(t0); noise.stop(t0 + dur * 0.7 + 0.05);
+}
+
+function playWinSound() {
+  ensureAudio();
+  const t0 = audioCtx.currentTime;
+  [392, 494, 587, 784].forEach((f, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth'; osc.frequency.value = f;
+    const filt = audioCtx.createBiquadFilter();
+    filt.type = 'lowpass'; filt.frequency.value = 2200;
+    const g = audioCtx.createGain();
+    const start = t0 + i * 0.1;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(0.22, start + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.001, start + 0.9);
+    osc.connect(filt).connect(g).connect(masterGain);
+    osc.start(start); osc.stop(start + 1.0);
+  });
+}
+
+function playLoseSound() {
+  ensureAudio();
+  const t0 = audioCtx.currentTime;
+  [196, 174.6].forEach((f, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine'; osc.frequency.value = f;
+    const g = audioCtx.createGain();
+    const start = t0 + i * 0.5;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(0.5, start + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, start + 0.9);
+    osc.connect(g).connect(masterGain);
+    osc.start(start); osc.stop(start + 1.0);
+  });
+}
+
+function startHum() {
+  if (!audioCtx) return;
+  stopHum();
+  humOsc = audioCtx.createOscillator();
+  humOsc.type = 'sine';
+  humOsc.frequency.value = 52;
+  humGain = audioCtx.createGain();
+  humGain.gain.value = 0.0001;
+  humGain.gain.exponentialRampToValueAtTime(0.035, audioCtx.currentTime + 0.6);
+  humOsc.connect(humGain).connect(masterGain);
+  humOsc.start();
+}
+function stopHum() {
+  if (humOsc) {
+    try {
+      const t0 = audioCtx.currentTime;
+      humGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.3);
+      humOsc.stop(t0 + 0.35);
+    } catch (e) { /* 既に停止済みの場合は無視いたします */ }
+    humOsc = null; humGain = null;
+  }
+}
+
+/* =========================================================================
+   ゲーム状態・進行
+   ========================================================================= */
+const state = {
+  phase: 'start',      // 'start' | 'playing' | 'win' | 'lose'
+  life: MAX_LIFE,
+  maxLife: MAX_LIFE,
+  timeLeft: TOTAL_TIME,
+  totalTime: TOTAL_TIME,
+  score: 0,
+  frames: 0,
+  elapsed: 0,
+};
+let playElapsed = 0;
+let spawnTimer = 1.2;
+
+function getDifficulty() {
+  const p = clamp(playElapsed / TOTAL_TIME, 0, 1);
+  return {
+    interval: lerpNum(2.1, 1.0, p),
+    speed: lerpNum(5.5, 10, p),   // ゆっくり飛んでくるように減速いたしました
+    directRatio: lerpNum(0.55, 0.8, p),
+  };
+}
+
+function updateHUD() {
+  const pct = state.life / state.maxLife;
+  lifeFill.style.transform = `scaleX(${pct})`;
+  const t = Math.max(0, Math.ceil(state.timeLeft));
+  timerText.textContent = String(t);
+  timerText.classList.toggle('warn', t <= 10 && state.phase === 'playing');
+  scoreText.textContent = String(state.score);
+}
+
+function hideOverlays() {
+  startOverlay.classList.add('hidden');
+  endOverlay.classList.add('hidden');
+}
+
+function clearField() {
+  for (let i = meteors.length - 1; i >= 0; i--) removeMeteor(i);
+  for (let i = particles.length - 1; i >= 0; i--) {
+    scene.remove(particles[i].sprite); particles[i].sprite.material.dispose();
+  }
+  particles.length = 0;
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    scene.remove(tracers[i].mesh); tracers[i].mesh.material.dispose();
+  }
+  tracers.length = 0;
+}
+
+function resetAndStart() {
+  ensureAudio();
+  clearField();
+  state.phase = 'playing';
+  state.life = MAX_LIFE;
+  state.timeLeft = TOTAL_TIME;
+  state.score = 0;
+  playElapsed = 0;
+  spawnTimer = 1.0;
+  stickRaw.x = 0; stickRaw.y = 0;
+  turret.yawRaw = 0; turret.pitchRaw = 0; turret.yawEased = 0; turret.pitchEased = 0;
+  hideOverlays();
+  updateHUD();
+  startHum();
+}
+
+function triggerWin() {
+  state.phase = 'win';
+  stopHum();
+  playWinSound();
+  spawnCelebration();
+  endTitle.textContent = '防衛成功';
+  endSubtitle.textContent = `90秒間、生存いたしました。撃墜数：${state.score}`;
+  endOverlay.classList.remove('hidden');
+}
+
+function triggerLose() {
+  state.phase = 'lose';
+  stopHum();
+  playLoseSound();
+  spawnSmoke();
+  const survived = Math.max(0, Math.round(playElapsed));
+  endTitle.textContent = '砲台大破';
+  endSubtitle.textContent = `生存時間：${survived}秒　撃墜数：${state.score}`;
+  endOverlay.classList.remove('hidden');
+}
+
+let celebrationTimer = 0;
+function spawnCelebration() {
+  celebrationTimer = 2.6;
+}
+function updateCelebration(dt) {
+  if (celebrationTimer > 0) {
+    celebrationTimer -= dt;
+    if (Math.random() < dt * 6) {
+      const p = new THREE.Vector3(rand(-2, 2), rand(2.5, 4.5), rand(-2, 2));
+      spawnParticles(p, { count: 3, color: Math.random() < 0.5 ? 0xffd166 : 0x9fe0c8, speed: 2, life: 1.0, size: 0.3, gravity: -1.2 });
+    }
+  }
+}
+
+let smokeTimer = 0;
+function spawnSmoke() { smokeTimer = 3.5; }
+function updateSmoke(dt) {
+  if (smokeTimer > 0) {
+    smokeTimer -= dt;
+    if (Math.random() < dt * 8) {
+      spawnParticles(PIVOT_POS.clone().add(new THREE.Vector3(rand(-0.4, 0.4), rand(-0.2, 0.3), rand(-0.4, 0.4))),
+        { count: 1, color: 0x555555, speed: 0.8, life: 1.4, size: 0.7, gravity: 0.6 });
+    }
+  }
+}
+
+startBtn.addEventListener('pointerdown', () => resetAndStart());
+retryBtn.addEventListener('pointerdown', () => resetAndStart());
+
+/* =========================================================================
+   メインループ
+   ========================================================================= */
+let lastTime = performance.now();
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  const rawDt = (now - lastTime) / 1000;
+  lastTime = now;
+  // dtScale方式：実時間ベースの移動量計算とし、上限1/30秒でクランプすることで
+  // 120Hz ProMotion環境でも60Hz環境と同じ速度で動作するようにいたします。
+  const dt = Math.min(rawDt, 1 / 30);
+
+  state.frames += 1;
+  state.elapsed += dt;
+
+  if (fireCooldownTimer > 0) fireCooldownTimer -= dt;
+  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt * 26);
+  statusLights.forEach(l => { l.material.emissiveIntensity = Math.max(1.2, l.material.emissiveIntensity - dt * 8); });
+
+  beacons.forEach((b, i) => {
+    b.material.emissiveIntensity = 0.9 + Math.sin(state.elapsed * 2 + i) * 0.5;
+  });
+
+  updateStick(dt);
+  updateTurret(dt);
+  updateCameraChase();
+  updateParticles(dt);
+  updateTracers(dt);
+  updateShake(dt);
+  updateCelebration(dt);
+  updateSmoke(dt);
+
+  // チェイスカメラの位置・向きを確定（シェイクはベース位置への揺れとして加算）
+  camera.position.copy(cameraBasePos);
+  if (shakeAmount > 0.0005) {
+    camera.position.x += rand(-1, 1) * 0.16 * shakeAmount;
+    camera.position.y += rand(-1, 1) * 0.16 * shakeAmount;
+    camera.position.z += rand(-1, 1) * 0.1 * shakeAmount;
+  }
+  camera.lookAt(cameraLookTarget);
+
+  if (state.phase === 'playing') {
+    playElapsed += dt;
+    state.timeLeft = Math.max(0, TOTAL_TIME - playElapsed);
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      const diff = getDifficulty();
+      spawnMeteor(diff);
+      spawnTimer = diff.interval * rand(0.75, 1.25);
+    }
+    updateMeteors(dt);
+
+    if (state.timeLeft <= 0) triggerWin();
+  }
+
+  updateHUD();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(tick);
+
+/* =========================================================================
+   テスト用フック（Playwright等での外部操作・状態ポーリング用）
+   ========================================================================= */
+window.__game = {
+  state,
+  entities: meteors, // 各要素の .position が実際の描画位置（内部データモデルではなく座標そのもの）
+  camera,
+  api: {
+    setStick(x, y) {
+      stickPointerId = 'api';
+      stickRaw.x = clamp(x, -1, 1);
+      stickRaw.y = clamp(y, -1, 1);
+    },
+    releaseStick() { stickPointerId = null; },
+    fire() { fireInput(); },
+    start() { resetAndStart(); },
+    reset() { resetAndStart(); },
+  },
+};
+</script>
+</body>
+</html>
