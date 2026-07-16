@@ -280,6 +280,9 @@ const TOTAL_TIME = 90;         // 生存目標秒数
 const MAX_LIFE = 160;
 const DAMAGE_PER_HIT = 20;
 const SPAWN_RADIUS = 52;
+const SPAWN_YAW_MAX = deg(50);   // 出現範囲：左右50度ずつ（可動範囲60度より内側で確実に狙える）
+const SPAWN_PITCH_MIN = 0;       // 出現範囲：水平から
+const SPAWN_PITCH_MAX = deg(50); // 出現範囲：上50度まで（地中や可動範囲外からは出現させない）
 const RETICLE_HIT_RADIUS_PX = 36; // 照準の丸の半径（この中に入ったら命中判定）
 const FIRE_COOLDOWN = 0.34;     // 重厚な単発砲のためのクールダウン
 
@@ -703,8 +706,8 @@ function spawnDirection(yaw, pitch) {
 }
 
 function spawnMeteor(diff) {
-  const yaw = rand(-YAW_MAX, YAW_MAX);
-  const pitch = rand(-PITCH_DOWN_MAX, PITCH_UP_MAX);
+  const yaw = rand(-SPAWN_YAW_MAX, SPAWN_YAW_MAX);
+  const pitch = rand(SPAWN_PITCH_MIN, SPAWN_PITCH_MAX);
   const dir = spawnDirection(yaw, pitch);
   const spawnPos = PIVOT_POS.clone().add(dir.clone().multiplyScalar(SPAWN_RADIUS));
 
@@ -714,7 +717,7 @@ function spawnMeteor(diff) {
     targetPos = PIVOT_POS.clone();
   } else {
     const flyPast = dir.clone().multiplyScalar(SPAWN_RADIUS + rand(30, 55));
-    const lateral = new THREE.Vector3(rand(-22, 22), rand(-4, 16), rand(-22, 22));
+    const lateral = new THREE.Vector3(rand(-22, 22), rand(0, 16), rand(-22, 22));
     targetPos = PIVOT_POS.clone().add(flyPast).add(lateral);
   }
 
